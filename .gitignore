@@ -1,0 +1,36 @@
+# Credentials: commit examples only
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local runtime data and recognizer cache
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
+backend/uploads/
+backend/demo-data/
+backend/test_img.png
+demo-data/
+frontend/src/assets/hero.png
+frontend/public/icons.svg
+test_images/
+tesseract_setup.exe
+
+# Dependencies and generated files
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local editor/OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
