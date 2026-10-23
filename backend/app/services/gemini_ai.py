@@ -97,6 +97,18 @@ class GeminiAIService:
             supported = self._evidence_is_present(raw_ocr_text, evidence)
             if field_name == "amount" and value is not None:
                 supported = supported and self._amount_matches_evidence(value, evidence)
+            if field_name == "quantity" and value is not None:
+                numeric_quantity = str(value).strip()
+                if re.fullmatch(r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?', numeric_quantity):
+                    # An unlabelled number could be a price, count, weight, etc.
+                    # Accept a bare count only when the source names its role.
+                    labelled = re.search(
+                        r'\b(?:qty|quantity|count)\s*[:=\-]?\s*'
+                        + re.escape(numeric_quantity) + r'(?![\d.])',
+                        raw_ocr_text,
+                        re.IGNORECASE,
+                    )
+                    supported = supported and bool(labelled)
             if status != "PRESENT" or score < 0.65 or not supported:
                 value = None
 
@@ -245,6 +257,37 @@ class GeminiAIService:
                     corrected = ranked[0][1]
                     extracted_data[date_field] = corrected
                     normalized_text = re.sub(r'\b' + re.escape(value) + r'\b', corrected, normalized_text, flags=re.IGNORECASE)
+
+        # Supported shorthand convention: customer -> product -> total -> date.
+        # The main line may have separate quantity-only branches. Read the total
+        # from the main sequence while retaining independently evidenced units.
+        if doc_type == DocumentType.CUSTOMER_ORDER and extracted_data.get('amount') is None:
+            lines = [line.strip() for line in raw_ocr_text.splitlines() if line.strip()]
+            main_line = lines[0] if lines else ''
+            quantity_branch = r'(?:(?:->|\u2192)\s*)?(?:(?:qty|quantity)\s*[:=]?\s*)?\d+(?:\.\d+)?\s*(?:kgs?|grams?|g|units?|pcs?|pieces?|litres?|liters?|ml|l)'
+            branches_are_quantities = all(re.fullmatch(quantity_branch, line, re.IGNORECASE) for line in lines[1:])
+            branches_are_evidenced = len(lines) <= 1 or extracted_data.get('quantity') is not None
+            segments = [part.strip() for part in re.split(r'\s*(?:->|\u2192)\s*', main_line)]
+            if len(segments) == 4 and branches_are_quantities and branches_are_evidenced:
+                customer, product, total, date = segments
+                customer_matches = customer.casefold() == str(extracted_data.get('customer_name') or '').casefold()
+                product_matches = product.casefold() == str(extracted_data.get('product') or '').casefold()
+                date_matches = date.casefold() in {
+                    str(extracted_data.get('delivery_date') or '').casefold(),
+                    str(confidence.get('delivery_date', {}).get('evidence') or '').casefold(),
+                }
+                numeric_total = re.fullmatch(r'(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?', total)
+                if customer_matches and product_matches and date_matches and numeric_total:
+                    amount = float(total.replace(',', ''))
+                    if amount > 0:
+                        extracted_data['amount'] = int(amount) if amount.is_integer() else amount
+                        confidence['amount'] = {
+                            'score': 0.85, 'status': 'PRESENT', 'evidence': main_line,
+                            'interpretation': 'customer -> product -> total amount -> delivery date',
+                        }
+                        provenance['amount'] = 'VISION/OCR/NORMALIZATION'
+                        if extracted_data.get('quantity') is None:
+                            confidence['quantity'] = {'score': 0.85, 'status': 'NOT_PRESENT', 'evidence': None}
 
         required = {
             DocumentType.CUSTOMER_ORDER: ["customer_name", "product", "quantity", "delivery_date", "amount"],

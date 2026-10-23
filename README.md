@@ -4,6 +4,24 @@ An image-to-action worker for micro-entrepreneurs. Upload a handwritten order, i
 
 Built with React, TypeScript, FastAPI, SQLAlchemy, SQLite, and Gemini vision. Files and workflow records live locally; real image recognition uses a cloud provider. The app drafts actions but does not send messages or execute payments.
 
+## The problem
+
+A shopkeeper's order note often fits on one line. Turning that line into a useful record is harder than just reading the handwriting: a number might be a quantity or a price, and a missing amount should stay missing until someone supplies it.
+
+VyaparFlow focuses on that step between reading a document and acting on it. The user can check the image against the extracted record, correct missing details, and review the draft before approving it.
+
+## Where to start
+
+For a quick walkthrough, follow the offline setup below and try **Clear Order**, then **Missing Amount**. Neither needs an API key. To inspect the implementation, start with these files:
+
+- [workflow_engine.py](backend/app/services/workflow_engine.py): validation, clarification, provenance, and state transitions.
+- [image_analysis.py](backend/app/services/image_analysis.py): one image request and content-hash caching.
+- [gemini_ai.py](backend/app/services/gemini_ai.py): field evidence checks and supported shorthand interpretation.
+- [WorkflowDetail.tsx](frontend/src/pages/WorkflowDetail.tsx): extraction display, missing-field inputs, and approval.
+- [test_extraction_workflow.py](backend/test_extraction_workflow.py): examples of accepted and rejected interpretations.
+
+[Design decisions](docs/DESIGN.md) explains the tradeoffs and the edge cases behind the extraction rules. [Architecture notes](docs/ARCHITECTURE.md) describes how the pieces connect.
+
 ## Features
 
 - Dashboard with image uploads, sample workflows, and recent activity.
@@ -16,9 +34,13 @@ Built with React, TypeScript, FastAPI, SQLAlchemy, SQLite, and Gemini vision. Fi
 | --- | --- |
 | Harry -> 1 kg Papad -> Tomorrow | Amount only |
 | Wheat -> 28/09/2026 | Customer name, quantity, and amount |
+| Adam -> Rice -> 450 -> Tomorrow | Quantity only; the supported four-part shorthand treats the third segment as total amount |
+| Same shorthand with a separate 2 kg quantity branch | No missing fields; proceed to review |
 | Rajesh -> 2 kg Rice -> Rs 310 -> Friday | Proceed to review |
 
 Real-upload responses are not hardcoded to these examples. Recognition varies with handwriting and provider availability.
+
+The arrow format is an explicit application convention: `customer -> product -> total -> delivery date`. A separate quantity branch such as `-> 2 kg` is supported. Other unlabelled numbers remain ambiguous; the app does not treat every number as a price. Prefer units and a currency marker in real documents when possible.
 
 ## Quick start: offline sample demo
 
@@ -132,7 +154,7 @@ From `backend`, using your virtual-environment Python:
 python -m unittest discover -v -p "test_*.py"
 ```
 
-No key or network is needed. Tests cover absent/explicit amounts, human-input provenance, normalization without replacing raw text, customer/product disambiguation, content-hash isolation, quota handling, and offline evaluation. Mocked responses test workflow correctness; they are not a handwriting-accuracy benchmark.
+No key or network is needed. The current suite has 20 tests covering absent/explicit amounts, human-input provenance, normalization without replacing raw text, customer/product disambiguation, numeric roles, separate quantity branches, content-hash isolation, quota handling, and offline evaluation. Mocked responses test workflow correctness; they are not a handwriting-accuracy benchmark.
 
 From `frontend`:
 
@@ -163,7 +185,7 @@ GitHub Actions runs backend tests and frontend checks on pushes and pull request
 - Real images are sent to Google's Gemini API. Local storage includes original images, recognition caches, SQLite records, and audit logs. Assess this data handling before using sensitive documents.
 - The sensitive-PII sample is illustrative, not a production PII-redaction system or compliance guarantee.
 - Dashboard health badges are presentation placeholders, not live provider probes.
-- Confidence is provider-reported. Missing amounts are not inferred from products or quantities.
+- Confidence includes provider scores and heuristic scores from normalization rules; it is not statistically calibrated. Missing amounts are not estimated from products or quantities. The documented arrow shorthand is a format assumption, not a general solution for every handwritten layout.
 - Compatibility services still import the legacy Google SDK; the active real-image path uses HTTPS via `httpx`.
 - Environment files, documents, databases, caches, dependencies, logs, and installers are excluded from Git. No personal workflow history is needed for the demo.
 

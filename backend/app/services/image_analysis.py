@@ -51,6 +51,15 @@ or prices remembered from other documents. Normalize clear date spelling errors
 and quantity units while retaining literal raw_text and evidence. Confidence 0..1.
 Product contains only product names, excluding quantity and unit. Quantity includes
 the number and unit, separated by a space.
+This app supports the specific shorthand customer -> product -> total amount ->
+delivery date. In that complete four-part format, the third standalone number is
+the total amount. Quantity may appear on a separate branch/line; preserve it
+when explicitly written with a unit or quantity label. Otherwise quantity is
+absent. Quote the full main sequence as evidence for the total amount.
+Outside that format, an unlabelled standalone number does not establish whether
+it is amount or quantity. Without a currency marker, quantity unit, explicit role
+label, or other unambiguous evidence, mark its role AMBIGUOUS and leave affected
+fields null. Never use one number for both fields or invent a quantity unit.
 For multiple products retain all quantities and product names in matching order.'''
         response = httpx.post(
             'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent',

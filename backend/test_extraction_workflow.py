@@ -211,6 +211,106 @@ class ExtractionWorkflowTests(unittest.TestCase):
         self.assertNotIn('customer_name', workflow.provenance)
         self.assertEqual(workflow.missing_info, ['customer_name', 'quantity', 'amount'])
 
+    def test_unlabelled_number_is_not_assumed_quantity_and_human_can_confirm_amount(self):
+        # Outside the supported four-part shorthand, numeric roles stay ambiguous.
+        raw = 'Alex -> Lentils -> 725 -> reference ABC -> Friday'
+        payload = {'normalized_text': raw, 'fields': {
+            'customer_name': field('Alex', 'Alex'),
+            'product': field('Lentils', 'Lentils'),
+            'quantity': field('725', '725'),
+            'delivery_date': field('Friday', 'Friday'),
+            'amount': field(None, None, 1.0, 'NOT_PRESENT'),
+        }}
+        worker, workflow = self.run_case(raw, payload)
+        self.assertIsNone(workflow.extracted_data['quantity'])
+        self.assertEqual(workflow.missing_info, ['quantity', 'amount'])
+        workflow = worker.clarify(workflow.id, {'amount': 725})
+        self.assertEqual(workflow.extracted_data['amount'], 725)
+        self.assertEqual(workflow.provenance['amount'], 'HUMAN_INPUT')
+        self.assertEqual(workflow.missing_info, ['quantity'])
+        self.assertEqual(workflow.raw_ocr_text, raw)
+        workflow = worker.clarify(workflow.id, {'quantity': '3 kg'})
+        self.assertEqual(workflow.state, WorkflowState.HUMAN_REVIEW.value)
+
+    def test_explicitly_labelled_quantity_count_is_preserved(self):
+        raw = 'Alex -> Lentils -> Qty: 2 -> Rs 725 -> Friday'
+        payload = {'normalized_text': raw, 'fields': {
+            'customer_name': field('Alex', 'Alex'),
+            'product': field('Lentils', 'Lentils'),
+            'quantity': field('2', '2'),
+            'delivery_date': field('Friday', 'Friday'),
+            'amount': field(725, 'Rs 725'),
+        }}
+        _, workflow = self.run_case(raw, payload)
+        self.assertEqual(workflow.extracted_data['quantity'], '2')
+        self.assertEqual(workflow.state, WorkflowState.HUMAN_REVIEW.value)
+
+    def test_shorthand_total_is_read_for_each_new_workflow_without_reusing_amounts(self):
+        for total in ('725', '980', '1,250.50'):
+            with self.subTest(total=total):
+                raw = 'Alex -> Lentils -> ' + total + ' -> Friday'
+                payload = {'normalized_text': raw, 'fields': {
+                    'customer_name': field('Alex', 'Alex'),
+                    'product': field('Lentils', 'Lentils'),
+                    'quantity': field(total, total),
+                    'delivery_date': field('Friday', 'Friday'),
+                    'amount': field(None, None, 1.0, 'NOT_PRESENT'),
+                }}
+                worker, workflow = self.run_case(raw, payload)
+                self.assertEqual(workflow.extracted_data['amount'], float(total.replace(',', '')))
+                self.assertIsNone(workflow.extracted_data['quantity'])
+                self.assertEqual(workflow.missing_info, ['quantity'])
+                self.assertEqual(workflow.provenance['amount'], 'VISION/OCR/NORMALIZATION')
+                self.assertEqual(workflow.field_confidence['amount']['evidence'], raw)
+                workflow = worker.clarify(workflow.id, {'quantity': '2 kg'})
+                self.assertEqual(workflow.state, WorkflowState.HUMAN_REVIEW.value)
+
+    def test_shorthand_does_not_reinterpret_an_explicit_quantity_as_amount(self):
+        raw = 'Alex -> Lentils -> 2 kg -> Friday'
+        payload = {'normalized_text': raw, 'fields': {
+            'customer_name': field('Alex', 'Alex'),
+            'product': field('Lentils', 'Lentils'),
+            'quantity': field('2 kg', '2 kg'),
+            'delivery_date': field('Friday', 'Friday'),
+            'amount': field(None, None, 1.0, 'NOT_PRESENT'),
+        }}
+        _, workflow = self.run_case(raw, payload)
+        self.assertIsNone(workflow.extracted_data['amount'])
+        self.assertEqual(workflow.extracted_data['quantity'], '2 kg')
+        self.assertEqual(workflow.missing_info, ['amount'])
+
+    def test_shorthand_with_quantity_branch_proceeds_directly_to_review(self):
+        for total, quantity in [('725', '3 kg'), ('980.50', '4 kg')]:
+            with self.subTest(total=total, quantity=quantity):
+                main = 'Alex -> Lentils -> ' + total + ' -> Friday'
+                raw = main + '\n -> ' + quantity
+                payload = {'normalized_text': raw, 'fields': {
+                    'customer_name': field('Alex', 'Alex'),
+                    'product': field('Lentils', 'Lentils'),
+                    'quantity': field(quantity, quantity),
+                    'delivery_date': field('Friday', 'Friday'),
+                    'amount': field(float(total), total),
+                }}
+                _, workflow = self.run_case(raw, payload)
+                self.assertEqual(workflow.extracted_data['amount'], float(total))
+                self.assertEqual(workflow.extracted_data['quantity'], quantity)
+                self.assertEqual(workflow.state, WorkflowState.HUMAN_REVIEW.value)
+                self.assertIsNone(workflow.missing_info)
+                self.assertEqual(workflow.field_confidence['quantity']['evidence'], quantity)
+                self.assertEqual(workflow.field_confidence['amount']['evidence'], main)
+
+    def test_unrelated_numeric_branch_does_not_activate_shorthand_total(self):
+        raw = 'Alex -> Lentils -> 725 -> Friday\nReference 123'
+        payload = {'normalized_text': raw, 'fields': {
+            'customer_name': field('Alex', 'Alex'),
+            'product': field('Lentils', 'Lentils'),
+            'delivery_date': field('Friday', 'Friday'),
+            'amount': field(None, None, 1.0, 'NOT_PRESENT'),
+        }}
+        _, workflow = self.run_case(raw, payload)
+        self.assertIsNone(workflow.extracted_data['amount'])
+        self.assertIn('amount', workflow.missing_info)
+
 
 if __name__ == "__main__":
     unittest.main()
